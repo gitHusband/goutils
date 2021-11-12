@@ -1,5 +1,9 @@
 {
-    "na\\me": "Tom\\",
+    "na\\me": "Tom\"",
     "age": "18",
-    "is\"Cop": false
+    "is\"Cop": false,
+    "arr": [
+        "one",
+        "two"
+    ]
 }

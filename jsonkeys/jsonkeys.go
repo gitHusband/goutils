@@ -33,10 +33,12 @@ const (
 	scanStateEndKey                        // key 的结束标志 '"'
 	scanStateKeyValueSeparator             // key 的结束标志 '"'
 	scanStateBeginValue                    // value 的开始标志 '"', 它与 key 的结束标志之间必须有 ":"
+	scanStateBeginValueWithArray           // value 以 '[' 开始，以 ']' 结尾, 数组类型
 	scanStateBeginValueWithoutQuote        // value 没有以 '"' 为开始标志, 比如 数字，布尔值等
 	scanStateValueCharacter                // 由于 value 内容支持 '"', 必须判断读取到的 '"' 是否是 value 的结束标志
 	scanStateEndValue                      // value 的结束标志 '"'
 	scanStateEndValueWithoutQuote          // value 没有以 '"' 为结束标志, 比如 数字，布尔值等
+	scanStateEndValueWithArray             // value 以 '[' 开始，以 ']' 结尾, 数组类型
 	// scanStateKeyKeySeparator               // 对象包含下一个 key 的标志 ","
 	scanStateEndObject // 对象的结束标志 "}"
 )
@@ -58,6 +60,8 @@ func ParseFromData(data []byte) (jsonKeysMap, error) {
 
 	dataLen := len(data)
 	for i := 0; i < dataLen; i++ {
+		// fmt.Printf("%v", string(data[i]))
+
 		state, err := scan.step(scan, data[i])
 		if err != nil {
 			return nil, err
@@ -250,7 +254,8 @@ func stepEndKey(s *scanner, c byte) (int, error) {
 }
 
 // 1. value 以 '"' 开始，以 '"' 结尾
-// 2. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
+// 2. value 以 '[' 开始，以 ']' 结尾, 数组类型
+// 3. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
 // 判断是否是一个 value 的开始字符 '"'
 // 在双引号之间的所有字符将合成 value 字符串保存起来。
 func stepBeginValue(s *scanner, c byte) (int, error) {
@@ -263,7 +268,12 @@ func stepBeginValue(s *scanner, c byte) (int, error) {
 		scan.step = stepValueCharacter
 		scan.states = append(scan.states, scanStateBeginValue)
 		return scanStateBeginValue, nil
-	// 2. value 没有开始结束标志
+	// 2. value 以 '[' 开始，以 ']' 结尾, 数组类型
+	case '[':
+		scan.step = stepValueCharacterWithArray
+		scan.states = append(scan.states, scanStateBeginValueWithArray)
+		return scanStateBeginValueWithArray, nil
+	// 3. value 没有开始结束标志
 	default:
 		scan.step = stepValueCharacterWithoutQuote
 		scan.states = append(scan.states, scanStateBeginValueWithoutQuote)
@@ -278,19 +288,44 @@ func stepBeginValue(s *scanner, c byte) (int, error) {
 func stepValueCharacter(s *scanner, c byte) (int, error) {
 	switch c {
 	case '"':
-		scan.step = stepEndValue
-		scan.states = append(scan.states, scanStateEndValue)
-		return scanStateEndValue, nil
-	// 有待完善，目前不考虑
+		if scan.isLastStateBackslash() {
+			scan.keyCharacters = append(scan.keyCharacters, c)
+			scan.deleteLastState()
+			return scanStateValueCharacter, nil
+		} else {
+			scan.step = stepEndValue
+			scan.states = append(scan.states, scanStateEndValue)
+			return scanStateEndValue, nil
+		}
 	case '\\':
-		scan.states = append(scan.states, scanStateBackslash)
-		return scanStateValueCharacter, nil
+		if scan.isLastStateBackslash() {
+			scan.keyCharacters = append(scan.keyCharacters, c)
+			scan.deleteLastState()
+			return scanStateValueCharacter, nil
+		} else {
+			scan.states = append(scan.states, scanStateBackslash)
+			return scanStateValueCharacter, nil
+		}
+
 	default:
 		return scanStateValueCharacter, nil
 	}
 }
 
-// 2. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
+// 2. value 以 '[' 开始，以 ']' 结尾, 数组类型
+// 我们不要 value, 所以就不保存它了
+func stepValueCharacterWithArray(s *scanner, c byte) (int, error) {
+	switch c {
+	case ']':
+		scan.step = stepEndValue
+		scan.states = append(scan.states, scanStateEndValueWithArray)
+		return scanStateEndValueWithArray, nil
+	default:
+		return scanStateValueCharacter, nil
+	}
+}
+
+// 3. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
 // 我们不要 value, 所以就不保存它了
 func stepValueCharacterWithoutQuote(s *scanner, c byte) (int, error) {
 	switch c {
