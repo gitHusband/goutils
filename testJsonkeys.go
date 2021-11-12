@@ -11,8 +11,8 @@ func main() {
 }
 
 func testjsonKeys() {
-	jsonStr := `{"name":"Tom", "age":"18","isCop":"false"}`
+	jsonStr := `{"na\\me":"Tom\\", "age":"18","is\"Cop":false}`
 
-	jsonKeysMap := jsonkeys.ParseKeys([]byte(jsonStr))
+	jsonKeysMap := jsonkeys.ParseFromData([]byte(jsonStr))
 	fmt.Printf("JSON key 顺序： \n%#v\n", jsonKeysMap)
 }

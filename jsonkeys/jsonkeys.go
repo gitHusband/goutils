@@ -3,7 +3,7 @@
 
 package jsonkeys
 
-import "fmt"
+import "os"
 
 type keySlice []string
 type jsonKeysMap map[string]keySlice
@@ -21,17 +21,19 @@ type scanner struct {
 }
 
 const (
-	scanStateIgnore            = iota // 没意义的字节，直接忽略
-	scanStateBeginObject              // 对象的开始标志 "{"
-	scanStateBeginKey                 // key 的开始标志 '"'
-	scanStateKeyCharacter             // key 的内容字节，支持任何字符，包括与 key 结束标志相同的 '"'
-	scanStateBackslash                // 由于 key 内容支持 '"', 必须判断读取到的 '"' 是否是 key 的结束标志
-	scanStateEndKey                   // key 的结束标志 '"'
-	scanStateKeyValueSeparator        // key 的结束标志 '"'
-	scanStateBeginValue               // value 的开始标志 '"', 它与 key 的结束标志之间必须有 ":"
-	scanStateValueCharacter           // 由于 value 内容支持 '"', 必须判断读取到的 '"' 是否是 value 的结束标志
-	scanStateEndValue                 // value 的结束标志 '"'
-	// scanStateKeyKeySeparator          // 对象包含下一个 key 的标志 ","
+	scanStateIgnore                 = iota // 没意义的字节，直接忽略
+	scanStateBeginObject                   // 对象的开始标志 "{"
+	scanStateBeginKey                      // key 的开始标志 '"'
+	scanStateKeyCharacter                  // key 的内容字节，支持任何字符，包括与 key 结束标志相同的 '"'
+	scanStateBackslash                     // 由于 key 内容支持 '"', 必须判断读取到的 '"' 是否是 key 的结束标志
+	scanStateEndKey                        // key 的结束标志 '"'
+	scanStateKeyValueSeparator             // key 的结束标志 '"'
+	scanStateBeginValue                    // value 的开始标志 '"', 它与 key 的结束标志之间必须有 ":"
+	scanStateBeginValueWithoutQuote        // value 没有以 '"' 为开始标志, 比如 数字，布尔值等
+	scanStateValueCharacter                // 由于 value 内容支持 '"', 必须判断读取到的 '"' 是否是 value 的结束标志
+	scanStateEndValue                      // value 的结束标志 '"'
+	scanStateEndValueWithoutQuote          // value 没有以 '"' 为结束标志, 比如 数字，布尔值等
+	// scanStateKeyKeySeparator               // 对象包含下一个 key 的标志 ","
 	scanStateEndObject // 对象的结束标志 "}"
 )
 
@@ -76,7 +78,22 @@ func (s *scanner) setOneKey() {
 	}
 }
 
-func ParseKeys(data []byte) jsonKeysMap {
+// 获取最后一个 state
+func (s *scanner) getLastState() int {
+	return s.states[len(s.states)-1]
+}
+
+// 删除最后一个 state
+func (s *scanner) deleteLastState() {
+	s.states = s.states[:len(s.states)-1]
+}
+
+// 判断上一个字符是否是 "\"
+func (s *scanner) isLastStateBackslash() bool {
+	return s.getLastState() == scanStateBackslash
+}
+
+func ParseFromData(data []byte) jsonKeysMap {
 	scan.reset()
 
 	dataLen := len(data)
@@ -98,9 +115,15 @@ func ParseKeys(data []byte) jsonKeysMap {
 			continue
 		case scanStateBeginValue:
 			continue
+		case scanStateBeginValueWithoutQuote:
+			i--
+			continue
 		case scanStateValueCharacter:
 			continue
 		case scanStateEndValue:
+			continue
+		case scanStateEndValueWithoutQuote:
+			i--
 			continue
 		case scanStateEndObject:
 			continue
@@ -156,14 +179,25 @@ func stepKeyCharacter(s *scanner, c byte) int {
 	switch c {
 	// key 结束标志
 	case '"':
-		scan.step = stepEndKey
-		scan.states = append(scan.states, scanStateEndKey)
-		scan.setOneKey()
-		return scanStateEndKey
-	// 有待完善，目前不考虑
+		if scan.isLastStateBackslash() {
+			scan.keyCharacters = append(scan.keyCharacters, c)
+			scan.deleteLastState()
+			return scanStateKeyCharacter
+		} else {
+			scan.step = stepEndKey
+			scan.states = append(scan.states, scanStateEndKey)
+			scan.setOneKey()
+			return scanStateEndKey
+		}
 	case '\\':
-		scan.states = append(scan.states, scanStateBackslash)
-		return scanStateKeyCharacter
+		if scan.isLastStateBackslash() {
+			scan.keyCharacters = append(scan.keyCharacters, c)
+			scan.deleteLastState()
+			return scanStateKeyCharacter
+		} else {
+			scan.states = append(scan.states, scanStateBackslash)
+			return scanStateKeyCharacter
+		}
 	default:
 		scan.keyCharacters = append(scan.keyCharacters, c)
 		return scanStateKeyCharacter
@@ -188,7 +222,8 @@ func stepEndKey(s *scanner, c byte) int {
 	}
 }
 
-// value 以 '"' 开始，以 '"' 结尾
+// 1. value 以 '"' 开始，以 '"' 结尾
+// 2. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
 // 判断是否是一个 value 的开始字符 '"'
 // 在双引号之间的所有字符将合成 value 字符串保存起来。
 func stepBeginValue(s *scanner, c byte) int {
@@ -196,20 +231,23 @@ func stepBeginValue(s *scanner, c byte) int {
 		return scanStateIgnore
 	}
 	switch c {
-	// value 开始标志
+	// 1. value 开始标志 '"'
 	case '"':
 		scan.step = stepValueCharacter
 		scan.states = append(scan.states, scanStateBeginValue)
 		return scanStateBeginValue
+	// 2. value 没有开始结束标志
 	default:
-		fmt.Printf("Scan %v\n", string(c))
-		panic("Error JSON Format")
+		scan.step = stepValueCharacterWithoutQuote
+		scan.states = append(scan.states, scanStateBeginValueWithoutQuote)
+		return scanStateBeginValueWithoutQuote
 	}
 }
 
+// 1. value 以 '"' 开始，以 '"' 结尾
 // 任何字符都能作为 value 值，包括 '"'
 // 那么必须区分 '"' 是否是 value 的结尾
-// 我们不要 value, 所以就不处理它了
+// 我们不要 value, 所以就不保存它了
 func stepValueCharacter(s *scanner, c byte) int {
 	switch c {
 	case '"':
@@ -220,6 +258,19 @@ func stepValueCharacter(s *scanner, c byte) int {
 	case '\\':
 		scan.states = append(scan.states, scanStateBackslash)
 		return scanStateValueCharacter
+	default:
+		return scanStateValueCharacter
+	}
+}
+
+// 2. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
+// 我们不要 value, 所以就不保存它了
+func stepValueCharacterWithoutQuote(s *scanner, c byte) int {
+	switch c {
+	case ',', '}':
+		scan.step = stepEndValue
+		scan.states = append(scan.states, scanStateEndValueWithoutQuote)
+		return scanStateEndValueWithoutQuote
 	default:
 		return scanStateValueCharacter
 	}
