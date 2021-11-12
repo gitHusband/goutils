@@ -6,6 +6,8 @@ import (
 	"github.com/gitHusband/goutils/jsonkeys"
 )
 
+const file = "./testeasy.json"
+
 func main() {
 	testjsonKeys()
 }
@@ -13,6 +15,15 @@ func main() {
 func testjsonKeys() {
 	jsonStr := `{"na\\me":"Tom\\", "age":"18","is\"Cop":false}`
 
-	jsonKeysMap := jsonkeys.ParseFromData([]byte(jsonStr))
-	fmt.Printf("JSON key 顺序： \n%#v\n", jsonKeysMap)
+	jsonDataKeysMap, err := jsonkeys.ParseFromData([]byte(jsonStr))
+	if err != nil {
+		fmt.Printf("JSON Data error： %v\n", err)
+	}
+	fmt.Printf("JSON Data key 顺序： \n%#v\n", jsonDataKeysMap)
+
+	jsonFileKeysMap, err := jsonkeys.ParseFromFile(file)
+	if err != nil {
+		fmt.Printf("JSON File error： %v\n", err)
+	}
+	fmt.Printf("JSON File key 顺序： \n%#v\n", jsonFileKeysMap)
 }

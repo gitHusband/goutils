@@ -5,6 +5,7 @@ package jsonkeys
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 )
 
@@ -12,7 +13,7 @@ type keySlice []string
 type jsonKeysMap map[string]keySlice
 
 type scanner struct {
-	step func(*scanner, byte) int
+	step func(*scanner, byte) (int, error)
 	// 存放叠加状态，先进后出，"{" "}" 必须成对删除
 	states []int
 	// 存放正在扫描的 key 的所有字符，扫描结束后合成字符串并清空之
@@ -49,6 +50,69 @@ var (
 
 func GetKeys() jsonKeysMap {
 	return keys
+}
+
+func ParseFromData(data []byte) (jsonKeysMap, error) {
+	keys = jsonKeysMap{RootPathName: []string{}}
+	scan.reset()
+
+	dataLen := len(data)
+	for i := 0; i < dataLen; i++ {
+		state, err := scan.step(scan, data[i])
+		if err != nil {
+			return nil, err
+		}
+
+		switch state {
+		case scanStateIgnore:
+			continue
+		case scanStateBeginObject:
+			continue
+		case scanStateBeginKey:
+			continue
+		case scanStateKeyCharacter:
+			continue
+		case scanStateEndKey:
+			continue
+		case scanStateKeyValueSeparator:
+			continue
+		case scanStateBeginValue:
+			continue
+		case scanStateBeginValueWithoutQuote:
+			i--
+			continue
+		case scanStateValueCharacter:
+			continue
+		case scanStateEndValue:
+			continue
+		case scanStateEndValueWithoutQuote:
+			i--
+			continue
+		case scanStateEndObject:
+			continue
+		}
+	}
+
+	return keys, nil
+}
+
+func ParseFromFile(file string) (jsonKeysMap, error) {
+	fileObj, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+
+	defer fileObj.Close()
+
+	reader := bufio.NewReader(fileObj)
+	buf := make([]byte, 1024)
+	_, err = reader.Read(buf)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return ParseFromData(buf)
 }
 
 func (s *scanner) reset() {
@@ -96,66 +160,6 @@ func (s *scanner) isLastStateBackslash() bool {
 	return s.getLastState() == scanStateBackslash
 }
 
-func ParseFromData(data []byte) jsonKeysMap {
-	keys = jsonKeysMap{RootPathName: []string{}}
-	scan.reset()
-
-	dataLen := len(data)
-	for i := 0; i < dataLen; i++ {
-		state := scan.step(scan, data[i])
-
-		switch state {
-		case scanStateIgnore:
-			continue
-		case scanStateBeginObject:
-			continue
-		case scanStateBeginKey:
-			continue
-		case scanStateKeyCharacter:
-			continue
-		case scanStateEndKey:
-			continue
-		case scanStateKeyValueSeparator:
-			continue
-		case scanStateBeginValue:
-			continue
-		case scanStateBeginValueWithoutQuote:
-			i--
-			continue
-		case scanStateValueCharacter:
-			continue
-		case scanStateEndValue:
-			continue
-		case scanStateEndValueWithoutQuote:
-			i--
-			continue
-		case scanStateEndObject:
-			continue
-		}
-	}
-
-	return keys
-}
-
-func ParseFromFile(file string) jsonKeysMap {
-	fileObj, err := os.Open(file)
-	if err != nil {
-		panic(err)
-	}
-
-	defer fileObj.Close()
-
-	reader := bufio.NewReader(fileObj)
-	buf := make([]byte, 1024)
-	_, err = reader.Read(buf)
-
-	if err != nil {
-		panic(err)
-	}
-
-	return ParseFromData(buf)
-}
-
 func isSpace(c byte) bool {
 	return c <= ' ' && (c == ' ' || c == '\t' || c == '\r' || c == '\n')
 }
@@ -163,85 +167,85 @@ func isSpace(c byte) bool {
 // 结构体 以 “{” 开始，以 "}" 结尾
 // 判断是否是一个结构体的开始字符 “{”
 // 标志着 下一个内容是 字段名（key）
-func stepBeginObject(s *scanner, c byte) int {
+func stepBeginObject(s *scanner, c byte) (int, error) {
 	if isSpace(c) {
-		return scanStateIgnore
+		return scanStateIgnore, nil
 	}
 	switch c {
 	case '{':
 		scan.step = stepBeginKey
 		// 保存 scanStateBeginObject
 		scan.states = append(scan.states, scanStateBeginObject)
-		return scanStateBeginObject
+		return scanStateBeginObject, nil
 	default:
-		panic("Error JSON Format")
+		return -1, fmt.Errorf("error json format, See stepBeginObject: character(%v)", string(c))
 	}
 }
 
 // key 以 '"' 开始，以 '"' 结尾
 // 判断是否是一个 key 的开始字符 '"'
 // 在双引号之间的所有字符将合成 key 字符串保存起来。
-func stepBeginKey(s *scanner, c byte) int {
+func stepBeginKey(s *scanner, c byte) (int, error) {
 	if isSpace(c) {
-		return scanStateIgnore
+		return scanStateIgnore, nil
 	}
 	switch c {
 	// key 开始标志
 	case '"':
 		scan.step = stepKeyCharacter
 		scan.states = append(scan.states, scanStateBeginKey)
-		return scanStateBeginKey
+		return scanStateBeginKey, nil
 	default:
-		panic("Error JSON Format")
+		return -1, fmt.Errorf("error json format, See stepBeginKey: character(%v)", string(c))
 	}
 }
 
 // 任何字符都能作为 key 值，包括 '"'
 // 那么必须区分 '"' 是否是 key 的结尾
-func stepKeyCharacter(s *scanner, c byte) int {
+func stepKeyCharacter(s *scanner, c byte) (int, error) {
 	switch c {
 	// key 结束标志
 	case '"':
 		if scan.isLastStateBackslash() {
 			scan.keyCharacters = append(scan.keyCharacters, c)
 			scan.deleteLastState()
-			return scanStateKeyCharacter
+			return scanStateKeyCharacter, nil
 		} else {
 			scan.step = stepEndKey
 			scan.states = append(scan.states, scanStateEndKey)
 			scan.setOneKey()
-			return scanStateEndKey
+			return scanStateEndKey, nil
 		}
 	case '\\':
 		if scan.isLastStateBackslash() {
 			scan.keyCharacters = append(scan.keyCharacters, c)
 			scan.deleteLastState()
-			return scanStateKeyCharacter
+			return scanStateKeyCharacter, nil
 		} else {
 			scan.states = append(scan.states, scanStateBackslash)
-			return scanStateKeyCharacter
+			return scanStateKeyCharacter, nil
 		}
 	default:
 		scan.keyCharacters = append(scan.keyCharacters, c)
-		return scanStateKeyCharacter
+		return scanStateKeyCharacter, nil
 	}
 }
 
 // key 以 '"' 开始，以 '"' 结尾
 // 判断是否是一个 key 的结束字符 '"'
 // 标志着 下一个内容是 字段值（value）
-func stepEndKey(s *scanner, c byte) int {
+func stepEndKey(s *scanner, c byte) (int, error) {
 	if isSpace(c) {
-		return scanStateIgnore
+		return scanStateIgnore, nil
 	}
 	switch c {
 	// key 与 value 的分隔符
 	case ':':
 		scan.step = stepBeginValue
 		scan.states = append(scan.states, scanStateKeyValueSeparator)
-		return scanStateKeyValueSeparator
+		return scanStateKeyValueSeparator, nil
 	default:
-		panic("Error JSON Format")
+		return -1, fmt.Errorf("error json format, See stepEndKey: character(%v)", string(c))
 	}
 }
 
@@ -249,21 +253,21 @@ func stepEndKey(s *scanner, c byte) int {
 // 2. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
 // 判断是否是一个 value 的开始字符 '"'
 // 在双引号之间的所有字符将合成 value 字符串保存起来。
-func stepBeginValue(s *scanner, c byte) int {
+func stepBeginValue(s *scanner, c byte) (int, error) {
 	if isSpace(c) {
-		return scanStateIgnore
+		return scanStateIgnore, nil
 	}
 	switch c {
 	// 1. value 开始标志 '"'
 	case '"':
 		scan.step = stepValueCharacter
 		scan.states = append(scan.states, scanStateBeginValue)
-		return scanStateBeginValue
+		return scanStateBeginValue, nil
 	// 2. value 没有开始结束标志
 	default:
 		scan.step = stepValueCharacterWithoutQuote
 		scan.states = append(scan.states, scanStateBeginValueWithoutQuote)
-		return scanStateBeginValueWithoutQuote
+		return scanStateBeginValueWithoutQuote, nil
 	}
 }
 
@@ -271,57 +275,57 @@ func stepBeginValue(s *scanner, c byte) int {
 // 任何字符都能作为 value 值，包括 '"'
 // 那么必须区分 '"' 是否是 value 的结尾
 // 我们不要 value, 所以就不保存它了
-func stepValueCharacter(s *scanner, c byte) int {
+func stepValueCharacter(s *scanner, c byte) (int, error) {
 	switch c {
 	case '"':
 		scan.step = stepEndValue
 		scan.states = append(scan.states, scanStateEndValue)
-		return scanStateEndValue
+		return scanStateEndValue, nil
 	// 有待完善，目前不考虑
 	case '\\':
 		scan.states = append(scan.states, scanStateBackslash)
-		return scanStateValueCharacter
+		return scanStateValueCharacter, nil
 	default:
-		return scanStateValueCharacter
+		return scanStateValueCharacter, nil
 	}
 }
 
 // 2. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
 // 我们不要 value, 所以就不保存它了
-func stepValueCharacterWithoutQuote(s *scanner, c byte) int {
+func stepValueCharacterWithoutQuote(s *scanner, c byte) (int, error) {
 	switch c {
 	case ',', '}':
 		scan.step = stepEndValue
 		scan.states = append(scan.states, scanStateEndValueWithoutQuote)
-		return scanStateEndValueWithoutQuote
+		return scanStateEndValueWithoutQuote, nil
 	default:
-		return scanStateValueCharacter
+		return scanStateValueCharacter, nil
 	}
 }
 
 // value 以 '"' 开始，以 '"' 结尾
 // 判断是否是一个 value 的结束字符 '"'
 // 标志着 下一个内容是 新的 key(",") 或者 结束("}")
-func stepEndValue(s *scanner, c byte) int {
+func stepEndValue(s *scanner, c byte) (int, error) {
 	if isSpace(c) {
-		return scanStateIgnore
+		return scanStateIgnore, nil
 	}
 	switch c {
 	// key 与 key 之间的分割符
 	case ',':
 		scan.step = stepBeginKey
 		scan.states = append(scan.states, scanStateBeginKey)
-		return scanStateBeginKey
+		return scanStateBeginKey, nil
 	// 目前不考虑多级嵌套的JSON
 	case '}':
 		scan.step = stepEndObject
 		scan.states = append(scan.states, scanStateEndObject)
-		return scanStateEndObject
+		return scanStateEndObject, nil
 	default:
-		panic("Error JSON Format")
+		return -1, fmt.Errorf("error json format, See stepEndValue: character(%v)", string(c))
 	}
 }
 
-func stepEndObject(s *scanner, c byte) int {
-	return 0
+func stepEndObject(s *scanner, c byte) (int, error) {
+	return 0, nil
 }
