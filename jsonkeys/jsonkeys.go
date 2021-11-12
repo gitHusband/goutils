@@ -3,7 +3,10 @@
 
 package jsonkeys
 
-import "os"
+import (
+	"bufio"
+	"os"
+)
 
 type keySlice []string
 type jsonKeysMap map[string]keySlice
@@ -40,7 +43,7 @@ const (
 var RootPathName = "root"
 
 var (
-	keys = jsonKeysMap{RootPathName: []string{}}
+	keys jsonKeysMap
 	scan = new(scanner)
 )
 
@@ -94,6 +97,7 @@ func (s *scanner) isLastStateBackslash() bool {
 }
 
 func ParseFromData(data []byte) jsonKeysMap {
+	keys = jsonKeysMap{RootPathName: []string{}}
 	scan.reset()
 
 	dataLen := len(data)
@@ -131,6 +135,25 @@ func ParseFromData(data []byte) jsonKeysMap {
 	}
 
 	return keys
+}
+
+func ParseFromFile(file string) jsonKeysMap {
+	fileObj, err := os.Open(file)
+	if err != nil {
+		panic(err)
+	}
+
+	defer fileObj.Close()
+
+	reader := bufio.NewReader(fileObj)
+	buf := make([]byte, 1024)
+	_, err = reader.Read(buf)
+
+	if err != nil {
+		panic(err)
+	}
+
+	return ParseFromData(buf)
 }
 
 func isSpace(c byte) bool {
