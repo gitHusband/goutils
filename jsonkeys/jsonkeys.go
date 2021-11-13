@@ -6,6 +6,7 @@ package jsonkeys
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -18,6 +19,9 @@ type scanner struct {
 	states []int
 	// 存放正在扫描的 key 的所有字符，扫描结束后合成字符串并清空之
 	keyCharacters []byte
+	// 存在上一个扫描到的 key，如果它的值是对象"{}"，那么把它插入到 keyPath 中
+	// 扫描完它的所有子 key 后将其从 keyPath 中移除
+	keyName string
 	// 存放正在扫描 JSON 的完整路径。
 	// 最外层默认是 {RootPathName}, 之后每次扫描到 "{", 都应将其父 key 插入到 keyPath 中
 	// 每次 "{" "}" 成对删除，都必须删除 keyPath 最后一个元素
@@ -40,7 +44,8 @@ const (
 	scanStateEndValueWithoutQuote          // value 没有以 '"' 为结束标志, 比如 数字，布尔值等
 	scanStateEndValueWithArray             // value 以 '[' 开始，以 ']' 结尾, 数组类型
 	// scanStateKeyKeySeparator               // 对象包含下一个 key 的标志 ","
-	scanStateEndObject // 对象的结束标志 "}"
+	scanStateEndObject     // 对象的结束标志 "}"
+	scanStateEndRootObject // 根对象的结束标志 "}"
 )
 
 var RootPathName = "root"
@@ -54,17 +59,15 @@ func GetKeys() jsonKeysMap {
 	return keys
 }
 
-func ParseFromData(data []byte) (jsonKeysMap, error) {
-	keys = jsonKeysMap{RootPathName: []string{}}
-	scan.reset()
-
+// 扫描数据
+func scanData(data []byte) error {
 	dataLen := len(data)
 	for i := 0; i < dataLen; i++ {
-		// fmt.Printf("%v", string(data[i]))
+		// fmt.Printf("%v - %v - %v\n", string(data[i]), dataLen, i)
 
 		state, err := scan.step(scan, data[i])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		switch state {
@@ -82,6 +85,8 @@ func ParseFromData(data []byte) (jsonKeysMap, error) {
 			continue
 		case scanStateBeginValue:
 			continue
+		case scanStateBeginValueWithArray:
+			continue
 		case scanStateBeginValueWithoutQuote:
 			i--
 			continue
@@ -89,17 +94,36 @@ func ParseFromData(data []byte) (jsonKeysMap, error) {
 			continue
 		case scanStateEndValue:
 			continue
+		case scanStateEndValueWithArray:
+			continue
 		case scanStateEndValueWithoutQuote:
 			i--
 			continue
 		case scanStateEndObject:
 			continue
+		case scanStateEndRootObject:
+			continue
 		}
+	}
+
+	return nil
+}
+
+// 1. 从JSON数据解析key
+func ParseFromData(data []byte) (jsonKeysMap, error) {
+	// 初始化
+	keys = jsonKeysMap{RootPathName: []string{}}
+	scan.reset()
+
+	err := scanData(data)
+	if err != nil {
+		return nil, err
 	}
 
 	return keys, nil
 }
 
+// 2. 从JSON文件解析key
 func ParseFromFile(file string) (jsonKeysMap, error) {
 	fileObj, err := os.Open(file)
 	if err != nil {
@@ -109,27 +133,60 @@ func ParseFromFile(file string) (jsonKeysMap, error) {
 	defer fileObj.Close()
 
 	reader := bufio.NewReader(fileObj)
-	buf := make([]byte, 1024)
-	_, err = reader.Read(buf)
+	bufLen := 1024
+	buf := make([]byte, bufLen)
 
-	if err != nil {
-		return nil, err
+	// 初始化
+	keys = jsonKeysMap{RootPathName: []string{}}
+	scan.reset()
+
+	for {
+		n, err := reader.Read(buf)
+
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		if n > 0 {
+			scanErr := scanData(buf[:n])
+
+			if scanErr != nil {
+				return nil, err
+			}
+		}
+
+		if err == io.EOF {
+			break
+		}
 	}
 
-	return ParseFromData(buf)
+	return keys, nil
 }
 
 func (s *scanner) reset() {
 	s.step = stepBeginObject
 	s.states = []int{}
 	s.keyCharacters = []byte{}
-	s.keyPath = []string{RootPathName}
+	s.keyName = RootPathName
+	s.keyPath = []string{}
+}
+
+func (s *scanner) appendKeyPath() {
+	s.keyPath = append(s.keyPath, s.keyName)
+}
+
+func (s *scanner) deleteLastKeyPath() {
+	s.keyPath = s.keyPath[:len(s.keyPath)-1]
+}
+
+func (s *scanner) isEndRootPath() bool {
+	return len(s.keyPath) == 0
 }
 
 func (s *scanner) getFullKeyPath() string {
 	fullKeyPath := s.keyPath[0]
 	for i := 1; i < len(s.keyPath); i++ {
-		fullKeyPath += ("." + fullKeyPath)
+		fullKeyPath += ("." + s.keyPath[i])
 	}
 
 	return fullKeyPath
@@ -139,8 +196,10 @@ func (s *scanner) setOneKey() {
 	key := string(s.keyCharacters)
 	// 清空 keyCharacters，准备保存下一个 key
 	s.keyCharacters = s.keyCharacters[0:0]
-	getFullKeyPath := s.getFullKeyPath()
+	// 保存 key
+	s.keyName = key
 
+	getFullKeyPath := s.getFullKeyPath()
 	// 保存一个 key 到 全局变量 keys
 	if _, ok := keys[getFullKeyPath]; !ok {
 		keys[getFullKeyPath] = keySlice{key}
@@ -180,6 +239,7 @@ func stepBeginObject(s *scanner, c byte) (int, error) {
 		scan.step = stepBeginKey
 		// 保存 scanStateBeginObject
 		scan.states = append(scan.states, scanStateBeginObject)
+		scan.appendKeyPath()
 		return scanStateBeginObject, nil
 	default:
 		return -1, fmt.Errorf("error json format, See stepBeginObject: character(%v)", string(c))
@@ -230,6 +290,9 @@ func stepKeyCharacter(s *scanner, c byte) (int, error) {
 			return scanStateKeyCharacter, nil
 		}
 	default:
+		if scan.isLastStateBackslash() {
+			scan.deleteLastState()
+		}
 		scan.keyCharacters = append(scan.keyCharacters, c)
 		return scanStateKeyCharacter, nil
 	}
@@ -256,7 +319,8 @@ func stepEndKey(s *scanner, c byte) (int, error) {
 // 1. value 以 '"' 开始，以 '"' 结尾
 // 2. value 以 '[' 开始，以 ']' 结尾, 数组类型
 // 3. value 不以 '"' 开始，不以 '"' 结尾, 比如 数字，布尔值等
-// 判断是否是一个 value 的开始字符 '"'
+// 4. value 以 '{' 开始，以 '}' 结尾, 对象类型
+// 判断是否是一个 value 的开始字符
 // 在双引号之间的所有字符将合成 value 字符串保存起来。
 func stepBeginValue(s *scanner, c byte) (int, error) {
 	if isSpace(c) {
@@ -273,6 +337,12 @@ func stepBeginValue(s *scanner, c byte) (int, error) {
 		scan.step = stepValueCharacterWithArray
 		scan.states = append(scan.states, scanStateBeginValueWithArray)
 		return scanStateBeginValueWithArray, nil
+	// 4. value 以 '{' 开始，以 '}' 结尾, 对象类型
+	case '{':
+		scan.step = stepBeginKey
+		scan.states = append(scan.states, scanStateBeginObject)
+		scan.appendKeyPath()
+		return scanStateBeginObject, nil
 	// 3. value 没有开始结束标志
 	default:
 		scan.step = stepValueCharacterWithoutQuote
@@ -289,7 +359,6 @@ func stepValueCharacter(s *scanner, c byte) (int, error) {
 	switch c {
 	case '"':
 		if scan.isLastStateBackslash() {
-			scan.keyCharacters = append(scan.keyCharacters, c)
 			scan.deleteLastState()
 			return scanStateValueCharacter, nil
 		} else {
@@ -299,15 +368,16 @@ func stepValueCharacter(s *scanner, c byte) (int, error) {
 		}
 	case '\\':
 		if scan.isLastStateBackslash() {
-			scan.keyCharacters = append(scan.keyCharacters, c)
 			scan.deleteLastState()
 			return scanStateValueCharacter, nil
 		} else {
 			scan.states = append(scan.states, scanStateBackslash)
 			return scanStateValueCharacter, nil
 		}
-
 	default:
+		if scan.isLastStateBackslash() {
+			scan.deleteLastState()
+		}
 		return scanStateValueCharacter, nil
 	}
 }
@@ -351,16 +421,23 @@ func stepEndValue(s *scanner, c byte) (int, error) {
 		scan.step = stepBeginKey
 		scan.states = append(scan.states, scanStateBeginKey)
 		return scanStateBeginKey, nil
-	// 目前不考虑多级嵌套的JSON
+	// 结束对象 标志
 	case '}':
-		scan.step = stepEndObject
+		// scan.step = stepEndObject
 		scan.states = append(scan.states, scanStateEndObject)
-		return scanStateEndObject, nil
+		scan.deleteLastKeyPath()
+		if scan.isEndRootPath() {
+			scan.step = stepEndRootObject
+			return scanStateEndRootObject, nil
+		} else {
+			return scanStateEndObject, nil
+		}
 	default:
 		return -1, fmt.Errorf("error json format, See stepEndValue: character(%v)", string(c))
 	}
 }
 
-func stepEndObject(s *scanner, c byte) (int, error) {
+// 忽略根对象后面多余的字符
+func stepEndRootObject(s *scanner, c byte) (int, error) {
 	return 0, nil
 }

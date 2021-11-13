@@ -1,9 +1,19 @@
 {
-    "na\\me": "Tom\"",
-    "age": "18",
+    "name": "Tom",
+    "age": 25,
     "is\"Cop": false,
-    "arr": [
-        "one",
-        "two"
-    ]
+    "favoriteFruits": {
+        "bannana": "yellow",
+        "apple": "red",
+        "peach": "pink"
+    },
+    "familyMember": [
+        "David",
+        "Sammy"
+    ],
+    "codeLanguage": {
+        "Golange": "21 世纪的\"C\"语言",
+        "Javascript": "Web 页面脚本语言",
+        "PHP": "世界上最好的语言"
+    }
 }
