@@ -10,8 +10,8 @@ import (
 	"os"
 )
 
-type keySlice []string
-type jsonKeysMap map[string]keySlice
+type KeySlice []string
+type JsonKeysMap map[string]KeySlice
 
 type scanner struct {
 	step func(*scanner, byte) (int, error)
@@ -51,12 +51,16 @@ const (
 var RootPathName = "root"
 
 var (
-	keys jsonKeysMap
+	keys JsonKeysMap
 	scan = new(scanner)
 )
 
-func GetKeys() jsonKeysMap {
-	return keys
+func (jkm JsonKeysMap) Get(keyPath string) (KeySlice, error) {
+	if value, ok := jkm[keyPath]; ok {
+		return value, nil
+	} else {
+		return nil, fmt.Errorf("no key (%v)", keyPath)
+	}
 }
 
 // 扫描数据
@@ -110,9 +114,9 @@ func scanData(data []byte) error {
 }
 
 // 1. 从JSON数据解析key
-func ParseFromData(data []byte) (jsonKeysMap, error) {
+func ParseFromData(data []byte) (JsonKeysMap, error) {
 	// 初始化
-	keys = jsonKeysMap{RootPathName: []string{}}
+	keys = JsonKeysMap{RootPathName: []string{}}
 	scan.reset()
 
 	err := scanData(data)
@@ -124,7 +128,7 @@ func ParseFromData(data []byte) (jsonKeysMap, error) {
 }
 
 // 2. 从JSON文件解析key
-func ParseFromFile(file string) (jsonKeysMap, error) {
+func ParseFromFile(file string) (JsonKeysMap, error) {
 	fileObj, err := os.Open(file)
 	if err != nil {
 		return nil, err
@@ -137,7 +141,7 @@ func ParseFromFile(file string) (jsonKeysMap, error) {
 	buf := make([]byte, bufLen)
 
 	// 初始化
-	keys = jsonKeysMap{RootPathName: []string{}}
+	keys = JsonKeysMap{RootPathName: []string{}}
 	scan.reset()
 
 	for {
@@ -202,7 +206,7 @@ func (s *scanner) setOneKey() {
 	getFullKeyPath := s.getFullKeyPath()
 	// 保存一个 key 到 全局变量 keys
 	if _, ok := keys[getFullKeyPath]; !ok {
-		keys[getFullKeyPath] = keySlice{key}
+		keys[getFullKeyPath] = KeySlice{key}
 	} else {
 		keys[getFullKeyPath] = append(keys[getFullKeyPath], key)
 	}
