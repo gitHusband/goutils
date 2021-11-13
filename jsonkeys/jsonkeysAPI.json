@@ -1,0 +1,14 @@
+{
+    "ParseFromData": {
+        "header": "从JSON数据解析key",
+        "desc": "func ParseFromData(data []byte) (JsonKeysMap, error)"
+    },
+    "ParseFromFile": {
+        "header": "从JSON文件解析key",
+        "desc": "func ParseFromFile(file string) (JsonKeysMap, error)"
+    },
+    "Get": {
+        "header": "获取 key 排序切片",
+        "desc": "func (jkm JsonKeysMap) Get(keyPath string) (StringSlice, error)"
+    }
+}
